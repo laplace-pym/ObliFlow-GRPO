@@ -33,6 +33,7 @@ def build_flow_graph(records: list[StepRecord], env_name: str) -> FlowGraph:
     )
     graph.add_artifact(task_artifact)
 
+    prior_handoff_artifacts: list[ArtifactNode] = []
     for record in records:
         action_id = f"{record.traj_uid}:a{record.step_id}"
         action = ActionNode(
@@ -67,8 +68,10 @@ def build_flow_graph(records: list[StepRecord], env_name: str) -> FlowGraph:
                     )
                 )
 
-        _add_consumption_edges(graph, record, action_id, task_artifact, step_artifacts)
+        consumption_edges = _add_consumption_edges(graph, record, action_id, task_artifact, step_artifacts, prior_handoff_artifacts)
+        _add_transformation_edges(graph, record, action_id, step_artifacts, consumption_edges)
         _add_discharge_edges(graph, record, step_artifacts)
+        prior_handoff_artifacts.extend(_handoff_artifacts(step_artifacts, action_id))
 
     return graph
 
@@ -89,61 +92,142 @@ def _add_consumption_edges(
     action_id: str,
     task_artifact: ArtifactNode,
     step_artifacts: list[ArtifactNode],
-) -> None:
+    prior_handoff_artifacts: list[ArtifactNode],
+) -> list[FlowEdge]:
+    added_edges: list[FlowEdge] = []
     goal_valid, goal_score, goal_reason = validate_goal_overlap(record.parsed_action.action, record.task_text)
-    graph.add_edge(
-        FlowEdge(
-            id=f"{task_artifact.id}->{action_id}",
-            traj_uid=record.traj_uid,
-            src=task_artifact.id,
-            dst=action_id,
-            edge_type="consumption",
-            step_id=record.step_id,
-            valid=goal_valid or record.step_id == 0,
-            score=max(goal_score, 0.1 if record.step_id == 0 else 0.0),
-            cost=0.0,
-            reason=goal_reason,
-        )
+    task_edge = FlowEdge(
+        id=f"{task_artifact.id}->{action_id}",
+        traj_uid=record.traj_uid,
+        src=task_artifact.id,
+        dst=action_id,
+        edge_type="consumption",
+        step_id=record.step_id,
+        valid=goal_valid or record.step_id == 0,
+        score=max(goal_score, 0.1 if record.step_id == 0 else 0.0),
+        cost=0.0,
+        reason=goal_reason,
     )
+    graph.add_edge(task_edge)
+    added_edges.append(task_edge)
 
     obs_artifacts = [artifact for artifact in step_artifacts if artifact.type in {"observation_text", "page_observation"}]
     for obs_artifact in obs_artifacts:
         valid = bool(record.is_action_valid and record.parsed_action.valid_format)
         score = 1.0 if valid else 0.0
-        graph.add_edge(
-            FlowEdge(
-                id=f"{obs_artifact.id}->{action_id}",
-                traj_uid=record.traj_uid,
-                src=obs_artifact.id,
-                dst=action_id,
-                edge_type="consumption",
-                step_id=record.step_id,
-                valid=valid,
-                score=score,
-                cost=0.0,
-                reason="current observation consumed by action" if valid else "invalid action cannot consume observation",
-            )
+        obs_edge = FlowEdge(
+            id=f"{obs_artifact.id}->{action_id}",
+            traj_uid=record.traj_uid,
+            src=obs_artifact.id,
+            dst=action_id,
+            edge_type="consumption",
+            step_id=record.step_id,
+            valid=valid,
+            score=score,
+            cost=0.0,
+            reason="current observation consumed by action" if valid else "invalid action cannot consume observation",
         )
+        graph.add_edge(obs_edge)
+        added_edges.append(obs_edge)
 
     available = record.info.get("admissible_commands") or record.info.get("available_actions")
     if available is not None:
         valid, score, reason = validate_admissible_action(record.parsed_action.action, available)
         for artifact in step_artifacts:
             if artifact.type in {"admissible_actions", "available_actions"}:
-                graph.add_edge(
-                    FlowEdge(
-                        id=f"{artifact.id}->{action_id}",
-                        traj_uid=record.traj_uid,
-                        src=artifact.id,
-                        dst=action_id,
-                        edge_type="consumption",
-                        step_id=record.step_id,
-                        valid=valid,
-                        score=score,
-                        cost=0.0,
-                        reason=reason,
-                    )
+                available_edge = FlowEdge(
+                    id=f"{artifact.id}->{action_id}",
+                    traj_uid=record.traj_uid,
+                    src=artifact.id,
+                    dst=action_id,
+                    edge_type="consumption",
+                    step_id=record.step_id,
+                    valid=valid,
+                    score=score,
+                    cost=0.0,
+                    reason=reason,
                 )
+                graph.add_edge(available_edge)
+                added_edges.append(available_edge)
+    for artifact in prior_handoff_artifacts:
+        valid, score, reason = _validate_prior_handoff(record, artifact)
+        handoff_edge = FlowEdge(
+            id=f"{artifact.id}->{action_id}",
+            traj_uid=record.traj_uid,
+            src=artifact.id,
+            dst=action_id,
+            edge_type="consumption",
+            step_id=record.step_id,
+            valid=valid,
+            score=score,
+            cost=0.0,
+            reason=reason,
+        )
+        graph.add_edge(handoff_edge)
+        added_edges.append(handoff_edge)
+    return added_edges
+
+
+def _handoff_artifacts(step_artifacts: list[ArtifactNode], action_id: str) -> list[ArtifactNode]:
+    handoff_types = {
+        "action_effect",
+        "page_transition",
+        "search_results",
+        "product_detail",
+        "object_state",
+        "task_score",
+        "success_state",
+    }
+    return [
+        artifact
+        for artifact in step_artifacts
+        if artifact.producer_action == action_id and artifact.type in handoff_types
+    ]
+
+
+def _validate_prior_handoff(record: StepRecord, artifact: ArtifactNode) -> tuple[bool, float, str]:
+    if not record.is_action_valid or not record.parsed_action.valid_format:
+        return False, 0.0, "invalid action cannot consume prior artifact"
+    overlap = max(
+        token_overlap(artifact.value, record.anchor_obs),
+        token_overlap(artifact.value, record.parsed_action.action),
+        token_overlap(artifact.value, record.parsed_action.think),
+    )
+    adjacent_bonus = 0.5 if artifact.step_id == record.step_id - 1 else 0.0
+    score = max(overlap, adjacent_bonus)
+    return score > 0.0, score, "prior artifact consumed by later action" if score > 0.0 else "prior artifact not consumed"
+
+
+def _add_transformation_edges(
+    graph: FlowGraph,
+    record: StepRecord,
+    action_id: str,
+    step_artifacts: list[ArtifactNode],
+    consumption_edges: list[FlowEdge],
+) -> None:
+    produced_artifacts = [
+        artifact
+        for artifact in step_artifacts
+        if artifact.producer_action == action_id and artifact.type not in {"env_action", "web_action"}
+    ]
+    for consume_edge in consumption_edges:
+        for artifact in produced_artifacts:
+            valid = bool(consume_edge.valid and artifact.confidence > 0.0 and record.is_action_valid)
+            graph.add_edge(
+                FlowEdge(
+                    id=f"{consume_edge.src}->{action_id}->{artifact.id}",
+                    traj_uid=record.traj_uid,
+                    src=consume_edge.src,
+                    dst=artifact.id,
+                    edge_type="transformation",
+                    step_id=record.step_id,
+                    valid=valid,
+                    score=min(consume_edge.score, artifact.confidence) if valid else 0.0,
+                    cost=0.0,
+                    reason="artifact transformed through action" if valid else "invalid artifact transformation",
+                    metadata={"via_action": action_id},
+                )
+            )
 
 
 def _add_discharge_edges(graph: FlowGraph, record: StepRecord, step_artifacts: list[ArtifactNode]) -> None:

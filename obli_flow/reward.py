@@ -80,9 +80,11 @@ def compute_step_credits(
         "obliflow/obligation_count": float(len(graph.obligations)),
         "obliflow/artifact_utilization_rate": len(used_artifacts) / max(1, len(total_artifacts)),
         "obliflow/obligation_coverage": _obligation_coverage(graph, max(step_ids) if step_ids else -1),
+        "obliflow/waste_tool_ratio": _waste_tool_ratio(graph, artifact_outflow),
         "obliflow/waste_penalty_mean": total_waste / max(1, len(step_ids)),
         "obliflow/break_penalty_mean": total_break / max(1, len(step_ids)),
         "obliflow/broken_handoff_rate": _broken_handoff_rate(graph),
+        "obliflow/discharge_edge_valid_rate": _discharge_edge_valid_rate(graph),
     }
     return FlowRewardResult(credits=credits, metrics=metrics, graph_debug=_graph_summary(graph))
 
@@ -104,7 +106,7 @@ def compute_phi(graph: FlowGraph, step_id: int, *, lambda_cost: float = 0.02) ->
 def _artifact_outflow(graph: FlowGraph) -> dict[str, int]:
     counts: dict[str, int] = {}
     for edge in graph.edges:
-        if edge.edge_type in {"consumption", "discharge"} and edge.valid:
+        if edge.edge_type in {"consumption", "transformation", "discharge"} and edge.valid:
             counts[edge.src] = counts.get(edge.src, 0) + 1
     return counts
 
@@ -168,6 +170,30 @@ def _broken_handoff_rate(graph: FlowGraph) -> float:
     consumption = [edge for edge in graph.edges if edge.edge_type == "consumption"]
     broken = [edge for edge in consumption if not edge.valid]
     return len(broken) / max(1, len(consumption))
+
+
+def _waste_tool_ratio(graph: FlowGraph, artifact_outflow: dict[str, int]) -> float:
+    action_count = 0
+    waste_count = 0
+    terminal_types = {"success_state", "task_score"}
+    for action in graph.actions:
+        produced = [
+            artifact
+            for artifact in graph.artifacts
+            if artifact.producer_action == action.id and artifact.type not in terminal_types
+        ]
+        if not produced:
+            continue
+        action_count += 1
+        if all(artifact_outflow.get(artifact.id, 0) == 0 for artifact in produced):
+            waste_count += 1
+    return waste_count / max(1, action_count)
+
+
+def _discharge_edge_valid_rate(graph: FlowGraph) -> float:
+    discharge_edges = [edge for edge in graph.edges if edge.edge_type == "discharge"]
+    valid_edges = [edge for edge in discharge_edges if edge.valid]
+    return len(valid_edges) / max(1, len(discharge_edges))
 
 
 def _graph_summary(graph: FlowGraph) -> dict[str, Any]:

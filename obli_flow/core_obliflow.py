@@ -106,12 +106,16 @@ def compute_obliflow_outcome_advantage(
     alpha: float = 1.0,
     beta: float = 0.3,
     mode: str = "mean_std_norm",
+    use_terminal_reward: bool = True,
     epsilon: float = 1e-6,
 ):
-    del traj_index
     response_length = response_mask.shape[-1]
     terminal_scores = token_level_rewards.sum(dim=-1)
-    raw_scores = terminal_scores + alpha * flow_rewards + beta * cut_blames
+    if use_terminal_reward:
+        traj_advantages = _trajectory_advantages(terminal_scores, index, traj_index, mode=mode, epsilon=epsilon)
+    else:
+        traj_advantages = torch.zeros_like(terminal_scores)
+    raw_scores = traj_advantages + alpha * flow_rewards + beta * cut_blames
 
     normalized = raw_scores.clone()
     with torch.no_grad():
@@ -129,3 +133,37 @@ def compute_obliflow_outcome_advantage(
 
     advantages = normalized.unsqueeze(-1).tile([1, response_length]) * response_mask
     return advantages, advantages
+
+
+def _trajectory_advantages(
+    terminal_scores: torch.Tensor,
+    index: np.ndarray,
+    traj_index: np.ndarray,
+    *,
+    mode: str,
+    epsilon: float,
+) -> torch.Tensor:
+    traj_advantages = torch.zeros_like(terminal_scores)
+    with torch.no_grad():
+        for uid in np.unique(index):
+            traj_locs: dict[Any, int] = {}
+            for row, (row_uid, row_traj) in enumerate(zip(index, traj_index)):
+                if row_uid == uid and row_traj not in traj_locs:
+                    traj_locs[row_traj] = row
+            if not traj_locs:
+                continue
+            rows = list(traj_locs.values())
+            row_tensor = torch.tensor(rows, device=terminal_scores.device, dtype=torch.long)
+            group = terminal_scores.index_select(0, row_tensor)
+            mean = group.mean()
+            if mode == "mean_norm" or len(rows) == 1:
+                norm_group = group - mean
+            elif mode == "mean_std_norm":
+                norm_group = (group - mean) / (group.std(unbiased=False) + epsilon)
+            else:
+                raise ValueError(f"Unknown ObliFlow mode: {mode}")
+            traj_to_adv = {traj: norm_group[i] for i, traj in enumerate(traj_locs)}
+            for row, (row_uid, row_traj) in enumerate(zip(index, traj_index)):
+                if row_uid == uid:
+                    traj_advantages[row] = traj_to_adv[row_traj]
+    return traj_advantages

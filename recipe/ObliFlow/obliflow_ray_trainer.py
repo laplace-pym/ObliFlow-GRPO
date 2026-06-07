@@ -372,6 +372,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             alpha=kwargs.get("obliflow_alpha", 1.0),
             beta=kwargs.get("obliflow_beta", 0.3),
             mode=kwargs.get("obliflow_mode", "mean_std_norm"),
+            use_terminal_reward=kwargs.get("obliflow_use_terminal_reward", True),
             )
         data.batch['advantages'] = advantages
         data.batch['returns'] = returns
@@ -1214,6 +1215,7 @@ class RayPPOTrainer:
                             obliflow_alpha=self.config.algorithm.get("obliflow", {}).get("alpha", 1.0),
                             obliflow_beta=self.config.algorithm.get("obliflow", {}).get("beta", 0.3),
                             obliflow_mode=self.config.algorithm.get("obliflow", {}).get("mode", "mean_std_norm"),
+                            obliflow_use_terminal_reward=self.config.algorithm.get("obliflow", {}).get("use_terminal_reward", True),
                             epsilon=1e-6,
                         )
 

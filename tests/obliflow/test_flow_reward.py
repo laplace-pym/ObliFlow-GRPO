@@ -40,6 +40,8 @@ def test_alfworld_success_flow_has_positive_final_credit():
     ]
     graph = build_flow_graph(records, "alfworld/AlfredTWEnv")
     result = compute_step_credits(graph, uid="u1")
+    assert any(edge.edge_type == "transformation" for edge in graph.edges)
+    assert any(edge.edge_type == "consumption" and edge.src.endswith(":next_obs") and edge.dst.endswith(":a1") for edge in graph.edges)
     assert result.credits[-1].delta_phi > 0
     assert result.credits[-1].obligation_coverage > 0
 
