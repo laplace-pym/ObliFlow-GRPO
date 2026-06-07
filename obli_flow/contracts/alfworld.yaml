@@ -1,0 +1,17 @@
+tool_name: ALFWorldEnvironment
+artifact_types:
+  - observation_text
+  - visible_objects
+  - admissible_actions
+  - env_action
+  - action_effect
+  - object_state
+  - success_state
+validators:
+  - validate_admissible_action
+  - validate_goal_overlap
+  - env_success
+cost:
+  env_action: 1.0
+  invalid_action: 2.0
+  no_op: 1.5

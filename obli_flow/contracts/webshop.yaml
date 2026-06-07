@@ -1,0 +1,20 @@
+tool_name: WebShopEnvironment
+artifact_types:
+  - shopping_goal
+  - page_observation
+  - available_actions
+  - search_query
+  - search_results
+  - product_detail
+  - buy_action
+  - task_score
+  - success_state
+validators:
+  - validate_search_query
+  - validate_click_target
+  - task_score
+  - env_success
+cost:
+  search: 1.0
+  click: 1.0
+  invalid_action: 2.0
