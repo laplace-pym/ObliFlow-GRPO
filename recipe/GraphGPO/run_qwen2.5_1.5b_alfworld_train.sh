@@ -75,4 +75,8 @@ python3 -m recipe.GraphGPO.main_graphgpo \
     trainer.test_freq=5 \
     trainer.total_epochs=150 \
     trainer.default_local_dir="${CHECKPOINTS_DIR}/${experiment_name}" \
+    trainer.save_local_metrics=True \
+    trainer.metrics_local_dir="${CHECKPOINTS_DIR}/${experiment_name}/local_metrics" \
+    trainer.metrics_jsonl_name=metrics.jsonl \
+    trainer.important_metrics_jsonl_name=important_metrics.jsonl \
     trainer.val_before_train=True $@

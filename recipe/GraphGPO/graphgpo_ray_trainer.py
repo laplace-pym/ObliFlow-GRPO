@@ -26,6 +26,7 @@ from collections import defaultdict
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pprint import pprint
 from typing import Dict, Optional, Type
@@ -68,6 +69,109 @@ from recipe.GraphGPO.rollout_loop import TrajectoryCollector
 from recipe.GraphGPO.utils import adjust_batch
 
 WorkerType = Type[Worker]
+
+
+class LocalMetricsRecorder:
+    """Persist per-step training metrics locally for offline inspection."""
+
+    IMPORTANT_METRIC_PREFIXES = (
+        "training/",
+        "val/",
+        "episode/",
+        "actor/",
+        "critic/score/",
+        "critic/rewards/",
+        "critic/advantages/",
+        "critic/returns/",
+        "response_length/",
+        "prompt_length/",
+        "perf/",
+        "global_seqlen/",
+    )
+    IMPORTANT_METRIC_KEYS = {
+        "timing_s/step",
+        "timing_s/gen",
+        "timing_s/reward",
+        "timing_s/adv",
+        "timing_s/update_actor",
+        "timing_s/save_checkpoint",
+        "timing_per_token_ms/gen",
+        "timing_per_token_ms/update_actor",
+    }
+
+    def __init__(self, metrics_dir: str, all_metrics_name: str = "metrics.jsonl", important_metrics_name: str = "important_metrics.jsonl"):
+        self.metrics_dir = metrics_dir
+        self.all_metrics_path = os.path.join(metrics_dir, all_metrics_name)
+        self.important_metrics_path = os.path.join(metrics_dir, important_metrics_name)
+        self.latest_important_metrics_path = os.path.join(metrics_dir, "latest_important_metrics.json")
+        os.makedirs(metrics_dir, exist_ok=True)
+        print(f"Local metrics will be saved to {metrics_dir}")
+
+    @classmethod
+    def from_config(cls, trainer_config):
+        metrics_dir = trainer_config.get("metrics_local_dir", None)
+        if metrics_dir is None:
+            metrics_dir = os.path.join(trainer_config.default_local_dir, "local_metrics")
+
+        return cls(
+            metrics_dir=metrics_dir,
+            all_metrics_name=trainer_config.get("metrics_jsonl_name", "metrics.jsonl"),
+            important_metrics_name=trainer_config.get("important_metrics_jsonl_name", "important_metrics.jsonl"),
+        )
+
+    def log(self, metrics: Dict, step: int, kind: str = "train"):
+        record = self._build_record(metrics=metrics, step=step, kind=kind)
+        important_record = self._build_record(metrics=self._filter_important_metrics(metrics), step=step, kind=kind)
+
+        self._append_jsonl(self.all_metrics_path, record)
+        self._append_jsonl(self.important_metrics_path, important_record)
+        self._write_latest(important_record)
+
+    def _build_record(self, metrics: Dict, step: int, kind: str):
+        record = {
+            "step": int(step),
+            "kind": kind,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        for key in sorted(metrics):
+            record[key] = metrics[key]
+        return record
+
+    def _filter_important_metrics(self, metrics: Dict):
+        return {key: value for key, value in metrics.items() if self._is_important_metric(key)}
+
+    def _is_important_metric(self, key: str):
+        return key in self.IMPORTANT_METRIC_KEYS or any(key.startswith(prefix) for prefix in self.IMPORTANT_METRIC_PREFIXES)
+
+    def _append_jsonl(self, path: str, record: Dict):
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False, default=self._json_default))
+            f.write("\n")
+
+    def _write_latest(self, record: Dict):
+        tmp_path = f"{self.latest_important_metrics_path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(record, f, ensure_ascii=False, indent=2, default=self._json_default)
+            f.write("\n")
+        os.replace(tmp_path, self.latest_important_metrics_path)
+
+    @staticmethod
+    def _json_default(value):
+        if isinstance(value, torch.Tensor):
+            value = value.detach().cpu()
+            return value.item() if value.numel() == 1 else value.tolist()
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, np.generic):
+            return value.item()
+        if dataclasses.is_dataclass(value):
+            return dataclasses.asdict(value)
+        if hasattr(value, "item"):
+            try:
+                return value.item()
+            except Exception:
+                pass
+        return str(value)
 
 
 class Role(Enum):
@@ -1044,6 +1148,10 @@ class RayPPOTrainer:
         if "wandb" in logger.logger:
             print(f"wandb run id: {logger.logger['wandb'].run.id}")
 
+        local_metrics_recorder = None
+        if self.config.trainer.get("save_local_metrics", True):
+            local_metrics_recorder = LocalMetricsRecorder.from_config(self.config.trainer)
+
         self.global_steps = 0
         # load checkpoint before doing anything
         self._load_checkpoint()
@@ -1055,6 +1163,8 @@ class RayPPOTrainer:
             assert val_metrics, f"{val_metrics=}"
             pprint(f"Initial validation metrics: {val_metrics}")
             logger.log(data=val_metrics, step=self.global_steps)
+            if local_metrics_recorder is not None:
+                local_metrics_recorder.log(metrics=val_metrics, step=self.global_steps, kind="validation")
             if self.config.trainer.get("val_only", False):
                 return
 
@@ -1335,6 +1445,8 @@ class RayPPOTrainer:
 
                 # TODO: make a canonical logger that supports various backend
                 logger.log(data=metrics, step=self.global_steps)
+                if local_metrics_recorder is not None:
+                    local_metrics_recorder.log(metrics=metrics, step=self.global_steps, kind="train")
 
                 progress_bar.update(1)
                 self.global_steps += 1

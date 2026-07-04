@@ -41,3 +41,7 @@ trainer:
   val_out: False
   val_only: False
   test_only: False
+  save_local_metrics: True
+  metrics_local_dir: null
+  metrics_jsonl_name: metrics.jsonl
+  important_metrics_jsonl_name: important_metrics.jsonl

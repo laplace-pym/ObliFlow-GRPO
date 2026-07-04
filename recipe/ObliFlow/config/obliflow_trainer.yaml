@@ -35,6 +35,24 @@ algorithm:
     enable_ledger_tags: False
     log_flow_graph: False
     log_flow_examples: 2
+    use_offline_subtasks: True
+    offline_subtask_path: ${oc.env:OBLIFLOW_OFFLINE_SUBTASK_PATH,}
+    offline_subtask_match_task_text: True
+    use_llm_decomposition: True
+    use_llm_verifier: True
+    llm_verify_parallelism: 1
+    llm_fallback_to_rules: True
+    llm_use_expert_trajectory: True
+    llm_base_url: ${oc.env:GLM_BASE_URL,https://search.bytedance.net/gpt/openapi/online/v2/crawl/openai/deployments/gpt_openapi}
+    llm_model: ${oc.env:GLM_MODEL,gpt-5.5-2026-04-24}
+    llm_api_key_env: GLM_API_KEY
+    llm_timeout_s: 30
+    llm_max_retries: 2
+    llm_temperature: null
+    llm_max_tokens: 1024
+    llm_max_subtasks: 6
+    llm_response_format_json: True
+    llm_cache_dir: ${oc.env:OBLIFLOW_LLM_CACHE_DIR,.cache/obliflow_llm}
   filter_groups:
     enable: False
     metric: null
@@ -49,3 +67,7 @@ trainer:
   val_out: False
   val_only: False
   test_only: False
+  save_local_metrics: True
+  metrics_local_dir: null
+  metrics_jsonl_name: metrics.jsonl
+  important_metrics_jsonl_name: important_metrics.jsonl

@@ -117,6 +117,17 @@ ENV/
 
 # data
 *.parquet
+/*.jsonl
+/*.jsonl.errors
+
+# local model/data artifacts
+/models/
+*.safetensors
+*.bin
+*.pth
+*.gguf
+agent_system/environments/env_package/webshop/webshop/data
+.cache/
 
 
 # local logs
@@ -131,4 +142,3 @@ outputs
 data/
 .tmp
 *ports
-

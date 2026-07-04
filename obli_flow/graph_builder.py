@@ -1,4 +1,5 @@
 from .extractors import get_extractor
+from .llm_verifier import verify_llm_subtasks_for_trajectory
 from .obligations import build_obligations
 from .schema import ActionNode, ArtifactNode, FlowEdge, FlowGraph, ObligationNode, StepRecord
 from .validators import (
@@ -12,13 +13,13 @@ from .validators import (
 )
 
 
-def build_flow_graph(records: list[StepRecord], env_name: str) -> FlowGraph:
+def build_flow_graph(records: list[StepRecord], env_name: str, config=None) -> FlowGraph:
     if not records:
         raise ValueError("Cannot build an ObliFlow graph from an empty trajectory.")
     first = records[0]
     last = records[-1]
     task_text = first.task_text
-    obligations = build_obligations(env_name=env_name, traj_uid=first.traj_uid, task_text=task_text, info=last.info)
+    obligations = build_obligations(env_name=env_name, traj_uid=first.traj_uid, task_text=task_text, info=last.info, config=config)
     graph = FlowGraph(traj_uid=first.traj_uid, env_name=env_name, obligations=obligations)
     extractor = get_extractor(env_name)
 
@@ -70,9 +71,10 @@ def build_flow_graph(records: list[StepRecord], env_name: str) -> FlowGraph:
 
         consumption_edges = _add_consumption_edges(graph, record, action_id, task_artifact, step_artifacts, prior_handoff_artifacts)
         _add_transformation_edges(graph, record, action_id, step_artifacts, consumption_edges)
-        _add_discharge_edges(graph, record, step_artifacts)
+        _add_discharge_edges(graph, record, step_artifacts, include_llm=False)
         prior_handoff_artifacts.extend(_handoff_artifacts(step_artifacts, action_id))
 
+    _add_llm_subtask_discharge_edges(graph, records, config=config)
     return graph
 
 
@@ -230,8 +232,10 @@ def _add_transformation_edges(
             )
 
 
-def _add_discharge_edges(graph: FlowGraph, record: StepRecord, step_artifacts: list[ArtifactNode]) -> None:
+def _add_discharge_edges(graph: FlowGraph, record: StepRecord, step_artifacts: list[ArtifactNode], include_llm: bool = True) -> None:
     for obligation in graph.obligations:
+        if obligation.type == "llm_subtask" and not include_llm:
+            continue
         for artifact in step_artifacts:
             score, valid, reason = _verify_discharge(record, artifact, obligation)
             if score <= 0.0 and not valid:
@@ -250,6 +254,64 @@ def _add_discharge_edges(graph: FlowGraph, record: StepRecord, step_artifacts: l
                     reason=reason,
                 )
             )
+
+
+def _add_llm_subtask_discharge_edges(graph: FlowGraph, records: list[StepRecord], config=None) -> None:
+    obligations = [obligation for obligation in graph.obligations if obligation.type == "llm_subtask"]
+    if not obligations:
+        return
+
+    checks = verify_llm_subtasks_for_trajectory(records, obligations, config=config)
+    if not checks:
+        return
+
+    final_step = records[-1].step_id if records else 0
+    for obligation in obligations:
+        check = checks.get(obligation.id)
+        if check is None:
+            continue
+        step_id = check.step_id if check.completed and check.step_id is not None else final_step
+        step_ids = {record.step_id for record in records}
+        if step_id not in step_ids:
+            step_id = final_step
+        source_artifact = _source_artifact_for_llm_check(graph, step_id)
+        if source_artifact is None:
+            continue
+        graph.add_edge(
+            FlowEdge(
+                id=f"{source_artifact.id}->{obligation.id}:llm_check",
+                traj_uid=graph.traj_uid,
+                src=source_artifact.id,
+                dst=obligation.id,
+                edge_type="discharge",
+                step_id=step_id,
+                valid=bool(check.completed),
+                score=check.score,
+                cost=0.0,
+                reason=check.reason,
+                metadata={"llm_checked": True, "evidence": check.evidence},
+            )
+        )
+
+
+def _source_artifact_for_llm_check(graph: FlowGraph, step_id: int) -> ArtifactNode | None:
+    preferred_types = (
+        "success_state",
+        "task_score",
+        "object_state",
+        "action_effect",
+        "page_transition",
+        "product_detail",
+        "search_results",
+        "env_action",
+        "web_action",
+    )
+    artifacts = graph.artifacts_by_step(step_id)
+    for artifact_type in preferred_types:
+        for artifact in artifacts:
+            if artifact.type == artifact_type:
+                return artifact
+    return artifacts[0] if artifacts else None
 
 
 def _verify_discharge(record: StepRecord, artifact: ArtifactNode, obligation: ObligationNode) -> tuple[float, bool, str]:

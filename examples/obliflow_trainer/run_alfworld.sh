@@ -1,12 +1,17 @@
 set -x
 ENGINE=${1:-vllm}
+if [[ $# -gt 0 ]]; then
+    shift
+fi
 export VLLM_ATTENTION_BACKEND=XFORMERS
+export OBLIFLOW_OFFLINE_SUBTASK_PATH=${OBLIFLOW_OFFLINE_SUBTASK_PATH:-/opt/tiger/alfworld_subtasks.jsonl}
 
 num_cpus_per_env_worker=0.1
 train_data_size=16
 val_data_size=128
 group_size=8
 experiment_name="obliflow_qwen2.5_1.5b_alfworld"
+CHECKPOINTS_DIR=${CHECKPOINTS_DIR:-/mnt/bn/qutuo-my2/jinhongbo/pym/checkpoints}
 
 python3 -m examples.data_preprocess.prepare \
     --mode 'text' \
@@ -23,6 +28,11 @@ python3 -m recipe.ObliFlow.main_obliflow \
     algorithm.obliflow.mode=mean_std_norm \
     algorithm.obliflow.use_min_cut=True \
     algorithm.obliflow.use_waste_penalty=True \
+    algorithm.obliflow.use_offline_subtasks=True \
+    algorithm.obliflow.offline_subtask_path="${OBLIFLOW_OFFLINE_SUBTASK_PATH}" \
+    algorithm.obliflow.use_llm_decomposition=False \
+    algorithm.obliflow.use_llm_verifier=True \
+    algorithm.obliflow.llm_fallback_to_rules=True \
     algorithm.use_kl_in_reward=False \
     data.train_files=$HOME/data/verl-agent/text/train.parquet \
     data.val_files=$HOME/data/verl-agent/text/test.parquet \
@@ -71,4 +81,9 @@ python3 -m recipe.ObliFlow.main_obliflow \
     trainer.save_freq=-1 \
     trainer.test_freq=5 \
     trainer.total_epochs=150 \
+    trainer.default_local_dir="${CHECKPOINTS_DIR}/${experiment_name}" \
+    trainer.save_local_metrics=True \
+    trainer.metrics_local_dir="${CHECKPOINTS_DIR}/${experiment_name}/local_metrics" \
+    trainer.metrics_jsonl_name=metrics.jsonl \
+    trainer.important_metrics_jsonl_name=important_metrics.jsonl \
     trainer.val_before_train=True $@

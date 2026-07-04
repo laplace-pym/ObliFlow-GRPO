@@ -1,3 +1,50 @@
+<h1 align="center">ObliFlow-GRPO</h1>
+
+<p align="center">
+Verifiable obligation-flow credit assignment for long-horizon agent GRPO, built on top of GraphGPO and verl-agent.
+</p>
+
+ObliFlow-GRPO extends GraphGPO-style multi-turn agent training by decomposing tasks into verifiable obligations or subtasks, checking intermediate trajectory evidence, and turning verified progress into step-level flow rewards and advantages.
+
+This repository is a fork of `verl-agent`. The original upstream README is kept below for the base framework, environment setup, and baseline recipes.
+
+## ObliFlow Additions
+
+- `obli_flow/`: obligation construction, offline/LLM subtask loading, artifact-flow graph construction, intermediate verification, and flow reward assignment.
+- `recipe/ObliFlow/`: ObliFlow trainer entry point, rollout loop integration, Hydra config, and advantage computation hook.
+- `examples/obliflow_trainer/`: runnable ALFWorld and WebShop training scripts.
+- `scripts/generate_alfworld_subtasks.py` and `scripts/generate_webshop_subtasks.py`: offline subtask generation utilities.
+
+## Key Entry Points
+
+- Trainer: `python3 -m recipe.ObliFlow.main_obliflow`
+- Config: `recipe/ObliFlow/config/obliflow_trainer.yaml`
+- Core reward code: `obli_flow/core_obliflow.py`, `obli_flow/graph_builder.py`, `obli_flow/reward.py`
+- LLM decomposition/verifier: `obli_flow/llm_obligations.py`, `obli_flow/llm_verifier.py`
+- Offline subtasks: `obli_flow/offline_subtasks.py`
+
+## Quick Start
+
+```bash
+# ALFWorld
+export OBLIFLOW_OFFLINE_SUBTASK_PATH=/path/to/alfworld_subtasks.jsonl
+bash examples/obliflow_trainer/run_alfworld.sh
+
+# WebShop
+export OBLIFLOW_OFFLINE_SUBTASK_PATH=/path/to/webshop_subtasks.jsonl
+bash examples/obliflow_trainer/run_webshop.sh
+```
+
+For LLM-based decomposition or verification, set the API key through the environment instead of committing secrets:
+
+```bash
+export GLM_API_KEY=<your_api_key>
+```
+
+Local model weights, `.env`, generated subtasks, WebShop data symlinks, caches, and run outputs are intentionally ignored by Git.
+
+---
+
 <p align="center">
     <img src="./docs/gigpo/logo-verl-agent.png" alt="logo" width="55%">
 </p>

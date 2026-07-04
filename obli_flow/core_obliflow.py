@@ -1,10 +1,12 @@
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
 import torch
 
 from .graph_builder import build_flow_graph
+from .llm_client import get_llm_stats
 from .metrics import aggregate_metric_dicts
 from .reward import compute_step_credits
 from .trajectory import build_step_records, group_records_by_traj
@@ -34,19 +36,16 @@ def compute_flow_step_rewards(batch, config=None, env_name: str = "") -> Batched
     by_key = {}
     metric_dicts: list[dict[str, float]] = []
 
-    for traj_uid, traj_records in grouped.items():
-        graph = build_flow_graph(traj_records, env_name=env_name)
-        result = compute_step_credits(
-            graph,
-            uid=traj_records[0].uid,
-            lambda_cost=float(_cfg_get(config, "lambda_cost", 0.02)),
-            eta_waste=float(_cfg_get(config, "eta_waste", 0.2)),
-            rho_break=float(_cfg_get(config, "rho_break", 0.5)),
-            beta_cut=float(_cfg_get(config, "beta", 0.3)),
-            use_min_cut=bool(_cfg_get(config, "use_min_cut", True)),
-            use_waste_penalty=bool(_cfg_get(config, "use_waste_penalty", True)),
-            use_terminal_reward=bool(_cfg_get(config, "use_terminal_reward", True)),
-        )
+    grouped_items = list(grouped.items())
+    parallelism = max(1, int(_cfg_get(config, "llm_verify_parallelism", 1)))
+    if parallelism > 1 and len(grouped_items) > 1:
+        max_workers = min(parallelism, len(grouped_items))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(lambda item: _compute_trajectory_flow(item, env_name, config), grouped_items))
+    else:
+        results = [_compute_trajectory_flow(item, env_name, config) for item in grouped_items]
+
+    for result in results:
         metric_dicts.append(result.metrics)
         for credit in result.credits:
             by_key[(credit.traj_uid, credit.step_id)] = credit
@@ -71,6 +70,7 @@ def compute_flow_step_rewards(batch, config=None, env_name: str = "") -> Batched
         utilization[i] = credit.artifact_utilization
 
     metrics = aggregate_metric_dicts(metric_dicts)
+    metrics.update(get_llm_stats(reset=True))
     metrics.update(
         {
             "obliflow/flow_reward_mean": float(flow_values.mean()) if size else 0.0,
@@ -93,6 +93,22 @@ def compute_flow_step_rewards(batch, config=None, env_name: str = "") -> Batched
         cut_blames=torch.tensor(cut_values, dtype=torch.float32, device=device),
         extra_info=extra_info,
         metrics=metrics,
+    )
+
+
+def _compute_trajectory_flow(item, env_name: str, config=None):
+    _, traj_records = item
+    graph = build_flow_graph(traj_records, env_name=env_name, config=config)
+    return compute_step_credits(
+        graph,
+        uid=traj_records[0].uid,
+        lambda_cost=float(_cfg_get(config, "lambda_cost", 0.02)),
+        eta_waste=float(_cfg_get(config, "eta_waste", 0.2)),
+        rho_break=float(_cfg_get(config, "rho_break", 0.5)),
+        beta_cut=float(_cfg_get(config, "beta", 0.3)),
+        use_min_cut=bool(_cfg_get(config, "use_min_cut", True)),
+        use_waste_penalty=bool(_cfg_get(config, "use_waste_penalty", True)),
+        use_terminal_reward=bool(_cfg_get(config, "use_terminal_reward", True)),
     )
 
 

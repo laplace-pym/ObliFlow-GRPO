@@ -342,6 +342,9 @@ class RayWorkerGroup(WorkerGroup):
                     "RAY_LOCAL_WORLD_SIZE": str(local_world_size),
                     "RAY_LOCAL_RANK": str(local_rank),
                 }
+                for network_env_key in ("MY_HOST_IP", "MY_HOST_IPV6", "GLOO_SOCKET_IFNAME", "NCCL_SOCKET_IFNAME"):
+                    if os.getenv(network_env_key):
+                        env_vars[network_env_key] = os.environ[network_env_key]
                 if rank != 0:
                     env_vars["MASTER_ADDR"] = self._master_addr
                     env_vars["MASTER_PORT"] = self._master_port
