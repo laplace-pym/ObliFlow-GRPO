@@ -5,6 +5,7 @@
 **/_build/
 **/*.ckpt
 **/outputs
+**/vis_*/
 **/*.tar.gz
 **/playground
 **/wandb
@@ -131,4 +132,3 @@ outputs
 data/
 .tmp
 *ports
-
