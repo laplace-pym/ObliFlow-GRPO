@@ -1,4 +1,25 @@
-# ObliFlow-GRPO
+<h1 align="center">ObliFlow-GRPO</h1>
+
+<p align="center">
+  <strong>
+    Training-Free Obligation-Flow Credit Assignment<br />
+    for Long-Horizon Multi-Tool Agents
+  </strong>
+</p>
+
+<p align="center">
+  <a href="./arxiv_author.pdf">
+    <img src="https://img.shields.io/badge/Paper-PDF-B31B1B?style=for-the-badge" alt="Paper PDF" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="./arxiv_author.pdf">
+    <img src="./image.png" alt="First-page preview of the ObliFlow-GRPO paper" width="900" />
+  </a>
+</p>
+
+<p align="center"><sub>Click the preview to open the full paper.</sub></p>
 
 ObliFlow-GRPO is a credit-assignment recipe for long-horizon agent
 reinforcement learning. It augments outcome-level GRPO with verified
